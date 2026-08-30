@@ -8,7 +8,7 @@ export default function GalleryPage({ params }) {
   const { sessionId } = use(params);
   const [status, setStatus] = useState("loading"); // loading | found | missing
   const [imageUrl, setImageUrl] = useState(null);
-  const [saving, setSaving] = useState(false);
+  const [photoFile, setPhotoFile] = useState(null);
 
   useEffect(() => {
     async function load() {
@@ -23,30 +23,44 @@ export default function GalleryPage({ params }) {
     load();
   }, [sessionId]);
 
-  async function handleSave() {
-    setSaving(true);
-    try {
-      const res = await fetch(imageUrl);
-      const blob = await res.blob();
-      const file = new File([blob], `photobooth-${sessionId}.png`, { type: blob.type });
+  // Pre-fetch the image as soon as we know its URL, well before any tap --
+  // this is what keeps the later share() call fast enough for iOS to allow it.
+  useEffect(() => {
+    if (!imageUrl) return;
+    fetch(imageUrl)
+      .then((res) => res.blob())
+      .then((blob) => {
+        const file = new File([blob], `photobooth-${sessionId}.png`, {
+          type: blob.type || "image/png",
+        });
+        setPhotoFile(file);
+      })
+      .catch((err) => console.error("Pre-fetch failed:", err));
+  }, [imageUrl, sessionId]);
 
-      if (navigator.canShare && navigator.canShare({ files: [file] })) {
-        await navigator.share({ files: [file], title: "Photobooth strip" });
+  async function handleSave() {
+    if (!photoFile) {
+      // Fetch never finished (e.g. slow connection) -- fall back to opening
+      // the image directly so they can still long-press to save it.
+      window.open(imageUrl, "_blank");
+      return;
+    }
+    try {
+      if (navigator.canShare && navigator.canShare({ files: [photoFile] })) {
+        await navigator.share({ files: [photoFile], title: "Photobooth strip" });
       } else {
-        const blobUrl = URL.createObjectURL(blob);
+        const blobUrl = URL.createObjectURL(photoFile);
         const a = document.createElement("a");
         a.href = blobUrl;
-        a.download = `photobooth-${sessionId}.png`;
+        a.download = photoFile.name;
         a.click();
         URL.revokeObjectURL(blobUrl);
       }
     } catch (err) {
-      // AbortError fires if the user cancels the share sheet -- not a real error
       if (err.name !== "AbortError") {
         console.error(err);
+        alert("Couldn't open the share sheet. Try pressing and holding the photo to save it instead.");
       }
-    } finally {
-      setSaving(false);
     }
   }
 
@@ -58,8 +72,8 @@ export default function GalleryPage({ params }) {
       <h1>Your photobooth strip</h1>
       <img src={imageUrl} alt="Your photobooth strip" style={{ maxWidth: "90vw" }} />
       <div>
-        <button onClick={handleSave} disabled={saving}>
-          {saving ? "Preparing…" : "Save to Photos"}
+        <button onClick={handleSave} disabled={!photoFile}>
+          {photoFile ? "Save to Photos" : "Preparing…"}
         </button>
       </div>
     </div>
